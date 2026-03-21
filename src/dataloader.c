@@ -1,5 +1,9 @@
 // Data loader implementation for k-means algorithm
 #include "dataloader.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 #define MAX_LINE_LEN 65536
 
 // Load NxD data from a binary file into data
@@ -62,7 +66,7 @@ int load_data_csv(const char* filename, double** data, int* n, int* d) {
             first_line = 0;
         } else if (col_count != dim) {
             fclose(file);
-            Stderr("Inconsistent column count in CSV file\n");
+            fprintf(stderr, "Inconsistent column count in CSV file\n");
             return -1;
         }
     }
