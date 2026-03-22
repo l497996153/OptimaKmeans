@@ -17,24 +17,26 @@ int main() {
     int max_iter = 1000;
     int* clusters;
     optima_malloc_clusters(&clusters, n);
-    double** centroids = optima_kmeans(data, n, d, k, max_iter, clusters);
+    double* centroids = optima_kmeans(data, n, d, k, max_iter, clusters);
     
+#ifdef DEBUG
     // Print centroids
     for (int i = 0; i < k; i++) {
         printf("Centroid %d: ", i);
         for (int j = 0; j < d; j++) {
-            printf("%f ", centroids[i][j]);
+            printf("%f ", centroids[i * d + j]);
         }
         printf("\n");
     }
-
     // Print cluster assignments
+    printf("Cluster assignments:\n");
     for (int i = 0; i < n; i++) {
         printf("Point %d assigned to cluster %d\n", i, clusters[i]);
     }
+#endif
 
     // Free allocated memory
-    optima_free_data(data, centroids, clusters, k);
+    optima_free_data(data, centroids, clusters);
 
     return 0;
 }

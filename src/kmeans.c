@@ -1,4 +1,3 @@
-// example main.c
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -24,15 +23,11 @@ static double dist(double *p1, double *p2, int dim)
     return sqrt(sum);
 }
 
-double **kmeans(double *data, int num_points, int dim, int k, int max_iteration, int *clusters)
+double *kmeans(double *data, int num_points, int dim, int k, int max_iteration, int *clusters)
 {
     // Allocate memory for centroids
-    // centroids is a 2D array [k][dim]
-    double **centroids = malloc(k * sizeof(double *));
-    for (int i = 0; i < k; i++)
-    {
-        centroids[i] = malloc(dim * sizeof(double));
-    }
+    // centroids is a 1D array [k * dim]
+    double *centroids = malloc(k * dim * sizeof(double));
 
     // Pick random points as starting centroids
     srand(time(NULL)); // Make sure that we get different starting centroids each time we run the program
@@ -41,7 +36,7 @@ double **kmeans(double *data, int num_points, int dim, int k, int max_iteration,
         int r = rand() % num_points;
         for (int d = 0; d < dim; d++)
         {
-            centroids[i][d] = data[r * dim + d];
+            centroids[i * dim + d] = data[r * dim + d];
         }
     }
 
@@ -58,7 +53,7 @@ double **kmeans(double *data, int num_points, int dim, int k, int max_iteration,
             // Calculate distance of this point to each centroid and find the closest one
             for (int centroid = 0; centroid < k; centroid++)
             {
-                double distance = dist(&data[i * dim], centroids[centroid], dim);
+                double distance = dist(&data[i * dim], &centroids[centroid * dim], dim);
                 if (distance < min_d)
                 {
                     min_d = distance;
@@ -81,20 +76,14 @@ double **kmeans(double *data, int num_points, int dim, int k, int max_iteration,
 
         // Calculate new centroids
         int *counts = calloc(k, sizeof(int));
-        double **new_sums = malloc(k * sizeof(double *));
-        for (int i = 0; i < k; i++)
-        {
-            new_sums[i] = calloc(dim, sizeof(double));
-        }
+        double *new_sums = malloc(k * dim * sizeof(double));
 
         // Sum up the coordinates of points in each cluster to calculate the new centroids
         for (int i = 0; i < num_points; i++)
         {
-            int centroid = clusters[i];
-            counts[centroid]++;
-            for (int d = 0; d < dim; d++)
-            {
-                new_sums[centroid][d] += data[i * dim + d];
+            for (int d = 0; d < dim; d++) {
+                new_sums[clusters[i] * dim + d] += data[i * dim + d];
+                counts[clusters[i]]++;
             }
         }
 
@@ -104,9 +93,8 @@ double **kmeans(double *data, int num_points, int dim, int k, int max_iteration,
             if (counts[centroid] > 0)
             {
                 for (int d = 0; d < dim; d++)
-                    centroids[centroid][d] = new_sums[centroid][d] / counts[centroid];
+                    centroids[centroid * dim + d] = new_sums[centroid * dim + d] / counts[centroid];
             }
-            free(new_sums[centroid]);
         }
         free(new_sums);
         free(counts);

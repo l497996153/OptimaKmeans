@@ -8,3 +8,9 @@ A high-performance K-Means library accelerated by OpenMP (CPU) and CUDA (GPU).
 
 **Example**
 See the [main.c](main.c) example for a complete usage demonstration.
+
+**How To Run Example**
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release

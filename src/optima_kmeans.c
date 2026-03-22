@@ -15,7 +15,7 @@ int optima_load_data_csv(const char* filename, double** data, int* n, int* d) {
     return load_data_csv(filename, data, n, d);
 }
 
-double** optima_kmeans(double *points, int num_points, int dim, int k, int max_iter, int *clusters) {
+double* optima_kmeans(double *points, int num_points, int dim, int k, int max_iter, int *clusters) {
     return kmeans(points, num_points, dim, k, max_iter, clusters);
 }
 
@@ -23,11 +23,8 @@ void optima_malloc_clusters(int** clusters, int k) {
     *clusters = malloc(k * sizeof(int));
 }
 
-void optima_free_data(double* data, double** centroids, int* clusters, int k) {
+void optima_free_data(double* data, double* centroids, int* clusters) {
     free_data(data);
-    for (int i = 0; i < k; i++) {
-        free(centroids[i]);
-    }
     free(centroids);
     free(clusters);
 }

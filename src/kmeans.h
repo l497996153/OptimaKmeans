@@ -10,6 +10,6 @@
  * @param clusters: Array of the cluster assignment for each point
  * @return: A 2D array of the final centroids [k][dim]
  */
-double** kmeans(double *points, int num_points, int dim, int k, int max_iter, int *clusters);
+double* kmeans(double *points, int num_points, int dim, int k, int max_iter, int *clusters);
 
 #endif
