@@ -5,6 +5,10 @@
 
 #define THREADS_PER_BLOCK 256
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Finding the nearest centroid for every point
 __global__ void find_centroid(double *d_data, double *d_centroids, int *d_clusters, 
                                   int N, int D, int K);
@@ -12,5 +16,12 @@ __global__ void find_centroid(double *d_data, double *d_centroids, int *d_cluste
 // Calculating the centroids
 __global__ void calculate_centroid(double *d_data, int *d_clusters, double *d_new_centroids, 
                               int *d_counts, int N, int D, int K);
+
+// Host-side GPU entry point. Returns centroid array with size K * D.
+double* kmeans_gpu(double *data, int num_points, int dim, int k, int max_iteration, int *clusters);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

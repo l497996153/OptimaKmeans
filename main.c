@@ -7,7 +7,7 @@ int main() {
     int n, d;
 
     // Load data from a csv file
-    if (optima_load_data_csv("../data/X_scaled.csv", &data, &n, &d) != 0) {
+    if (optima_load_data_csv("../data/final_processed.csv", &data, &n, &d) != 0) {
         fprintf(stderr, "Failed to load data from CSV file\n");
         return 1;
     }
