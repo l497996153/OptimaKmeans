@@ -7,8 +7,7 @@
 #include <string.h>
 
 //extern
-double* kmeans_gpu(double *h_data, int num_points, int dim, int k, int max_iteration, int *h_clusters);
-
+double* kmeans_gpu(double *h_data, int num_points, int dim, int k, int max_iteration, int *h_clusters, int *finished_iterations);
 int optima_load_data_bin(const char* filename, double** data, int* n, int* d) {
     return load_data_bin(filename, data, n, d);
 }
@@ -31,6 +30,8 @@ void optima_free_data(double* data, double* centroids, int* clusters) {
     free(clusters);
 }
 
-double* optima_kmeans_gpu(double *data, int num_points, int dim, int k, int max_iteration, int *clusters) {
-    return kmeans_gpu(data, num_points, dim, k, max_iteration, clusters);
+KMeansResult optima_kmeans_gpu(double *data, int num_points, int dim, int k, int max_iteration, int *clusters) {
+    KMeansResult result;
+    result.centroids = kmeans_gpu(data, num_points, dim, k, max_iteration, clusters, &result.iterations);
+    return result;
 }

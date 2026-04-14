@@ -18,7 +18,7 @@ __global__ void find_centroid(double *d_data, double *d_centroids, int *d_cluste
     // The thread id in the grid
     int idx = blockIdx.x * blockDim.x + tid;
 
-    for (int i = tid; i < K *D; i += blockDim.x) {
+    for (int i = tid; i < K * D; i += blockDim.x) {
         shared_centroids[i] = d_centroids[i];
     }
 
@@ -65,9 +65,9 @@ __global__ void centroid_sum(double *d_data, int *d_clusters, double *d_new_cent
             if (partner < 32 && ((group >> partner) & 1))
                 v += other;
         }
-        if (lane==leader) atomicAdd(&d_new_centroids[cid * D + d], v);
+        if (lane == leader) atomicAdd(&d_new_centroids[cid * D + d], v);
     }
-    if (lane==leader) atomicAdd(&d_counts[cid], __popc(group));
+    if (lane == leader) atomicAdd(&d_counts[cid], __popc(group));
 }
 
 __global__ void calculate_centroid(double *d_new_centroids, int *d_counts, int D, int K)
@@ -79,10 +79,9 @@ __global__ void calculate_centroid(double *d_new_centroids, int *d_counts, int D
     if (count > 0) {
         d_new_centroids[cid * D + d] /= count;
     }
-    
 }
 
-double* kmeans_gpu(double *h_data, int num_points, int dim, int k, int max_iteration, int *h_clusters)
+double* kmeans_gpu(double *h_data, int num_points, int dim, int k, int max_iteration, int *h_clusters, int *finished_iterations)
 {
     double *h_initial_centroids = (double *)malloc((size_t)k * (size_t)dim * sizeof(double));
     if (h_initial_centroids == NULL) {
@@ -115,7 +114,12 @@ double* kmeans_gpu(double *h_data, int num_points, int dim, int k, int max_itera
     int threadsPerBlock = 256;
     int blocksPerGrid = (num_points + threadsPerBlock - 1) / threadsPerBlock;
 
-    for (int iter = 0; iter < max_iteration; iter++) {
+    // Allocate host buffer to compare centroids for convergence check
+    double *host_buffer_prev_centroids = (double *)malloc((size_t)k * (size_t)dim * sizeof(double));
+    memcpy(host_buffer_prev_centroids, h_initial_centroids, (size_t)k * (size_t)dim * sizeof(double));
+
+    int iteration;
+    for (iteration = 0; iteration < max_iteration; iteration++) {
         find_centroid<<<blocksPerGrid, threadsPerBlock, shared_mem_size>>>(d_data, d_centroids, d_clusters, num_points, dim, k);
         cudaDeviceSynchronize();
         cudaMemset(d_new_centroids, 0, k * dim * sizeof(double));
@@ -125,6 +129,30 @@ double* kmeans_gpu(double *h_data, int num_points, int dim, int k, int max_itera
         calculate_centroid<<<k, dim>>>(d_new_centroids, d_counts, dim, k);
         cudaDeviceSynchronize();
         cudaMemcpy(d_centroids, d_new_centroids, k * dim * sizeof(double), cudaMemcpyDeviceToDevice);
+
+        // Check convergence by comparing new centroids to previous iteration
+        double *host_buffer_new_centroids = (double *)malloc((size_t)k * (size_t)dim * sizeof(double));
+        cudaMemcpy(host_buffer_new_centroids, d_centroids, k * dim * sizeof(double), cudaMemcpyDeviceToHost);
+        int converged = 1;
+        for (int i = 0; i < k * dim; i++) {
+            if (fabs(host_buffer_new_centroids[i] - host_buffer_prev_centroids[i]) > 1e-6) {
+                converged = 0;
+                break;
+            }
+        }
+        memcpy(host_buffer_prev_centroids, host_buffer_new_centroids, (size_t)k * (size_t)dim * sizeof(double));
+        free(host_buffer_new_centroids);
+        if (converged) 
+        { 
+            iteration++; 
+            break; 
+        }
+    }
+
+    free(host_buffer_prev_centroids);
+
+    if (finished_iterations != NULL) {
+        *finished_iterations = iteration;
     }
 
     double *h_centroids = (double *)malloc((size_t)k * (size_t)dim * sizeof(double));
