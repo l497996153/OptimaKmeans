@@ -21,4 +21,6 @@ void optima_malloc_clusters(int** clusters, int n);
 
 KMeansResult optima_kmeans_gpu(double *data, int num_points, int dim, int k, int max_iteration, int *clusters);
 
+KMeansResult optima_kmeans_gpu_streaming(double *data, int num_points, int dim, int k, int max_iteration, int *clusters);
+
 #endif // OPTIMA_KMEANS_H

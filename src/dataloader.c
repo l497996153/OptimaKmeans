@@ -113,3 +113,104 @@ void free_data(double* data) {
         free(data);
     }
 }
+
+// --- Chunked CSV API implementation ---
+
+int csv_probe(const char* filename, int* n, int* d) {
+    FILE* file = fopen(filename, "r");
+    if (!file) return -1;
+
+    char line[MAX_LINE_LEN];
+    if (!fgets(line, sizeof(line), file)) { fclose(file); return -1; }
+
+    *n = 0;
+    *d = 0;
+    int first = 1;
+    while (fgets(line, sizeof(line), file)) {
+        (*n)++;
+        if (first) {
+            int col_count = 0;
+            char* tmp = strdup(line);
+            char* token = strtok(tmp, ",");
+            while (token) { col_count++; token = strtok(NULL, ","); }
+            free(tmp);
+            *d = col_count - 2;
+            first = 0;
+        }
+    }
+    fclose(file);
+    return 0;
+}
+
+int csv_reader_open(CsvReader* reader, const char* filename) {
+    if (!reader) return -1;
+    reader->file = fopen(filename, "r");
+    if (!reader->file) return -1;
+
+    char line[MAX_LINE_LEN];
+    if (!fgets(line, sizeof(line), reader->file)) {
+        fclose(reader->file);
+        reader->file = NULL;
+        return -1;
+    }
+
+    reader->n = 0;
+    reader->d = 0;
+    reader->rows_read = 0;
+    int first = 1;
+    long pos_after_header = ftell(reader->file);
+
+    while (fgets(line, sizeof(line), reader->file)) {
+        reader->n++;
+        if (first) {
+            int col_count = 0;
+            char* tmp = strdup(line);
+            char* token = strtok(tmp, ",");
+            while (token) { col_count++; token = strtok(NULL, ","); }
+            free(tmp);
+            reader->d = col_count - 2;
+            first = 0;
+        }
+    }
+
+    reader->data_start_pos = pos_after_header;
+    fseek(reader->file, reader->data_start_pos, SEEK_SET);
+    return 0;
+}
+
+int csv_read_chunk(CsvReader* reader, double* buf, int max_rows) {
+    if (!reader || !reader->file || !buf) return -1;
+
+    char line[MAX_LINE_LEN];
+    int rows = 0;
+    int d = reader->d;
+
+    while (rows < max_rows && fgets(line, sizeof(line), reader->file)) {
+        char* token = strtok(line, ",");
+        if (token) token = strtok(NULL, ","); // skip first two columns
+
+        for (int j = 0; j < d; j++) {
+            token = strtok(NULL, ",\n\r");
+            if (token) {
+                buf[rows * d + j] = strtod(token, NULL);
+            }
+        }
+        rows++;
+    }
+    reader->rows_read += rows;
+    return rows;
+}
+
+void csv_reader_close(CsvReader* reader) {
+    if (reader && reader->file) {
+        fclose(reader->file);
+        reader->file = NULL;
+    }
+}
+
+void csv_reader_rewind(CsvReader* reader) {
+    if (reader && reader->file) {
+        fseek(reader->file, reader->data_start_pos, SEEK_SET);
+        reader->rows_read = 0;
+    }
+}

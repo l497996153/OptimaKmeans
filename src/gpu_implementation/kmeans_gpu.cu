@@ -1,202 +1,361 @@
 #include "kmeans_gpu.h"
-
 #include <cuda_runtime.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <float.h>
 #include <omp.h>
 
-// Finding the nearest centroid for every point
-__global__ void find_centroid(double *d_data, double *d_centroids, int *d_clusters, int N, int D, int K)
+extern "C" {
+#include "../dataloader.h"
+}
+
+#define NUM_BUFFERS 3
+
+/**
+ * @brief Assign points to nearest centroid and track if any assignments changed
+ *
+ * @param d_data         Stores the data by row-major with [N * D]
+ * @param d_centroids    Stores the centroids by row-major with [K * D]
+ * @param d_clusters     Stores the cluster ID for each point with [N]
+ * @param d_changed      Stores a flag indicating if any assignments changed with [1]
+ * @param N              The number of points
+ * @param D              The number of dimensions
+ * @param K              The number of clusters 
+ */
+__global__ void find_centroid(float *d_data, float *d_centroids, int *d_clusters, int *d_changed, int N, int D, int K)
 {
-    //TODO
-    // Load current centroids in shared memory
-    extern __shared__ double shared_centroids[];
-    // The thread id in the thread block
+    
+    // The shared memory has the current centroids for this iteration, so all threads in the block can access
+    extern __shared__ float shared_centroids[];
+    // The thread ID
     int tid = threadIdx.x;
-    // The thread id in the grid
+    // The global ID of the thread in the grid
     int idx = blockIdx.x * blockDim.x + tid;
 
-    for (int i = tid; i < K *D; i += blockDim.x) {
+    // Load current centroids into shared memory
+    for (int i = tid; i < K * D; i += blockDim.x) {
         shared_centroids[i] = d_centroids[i];
     }
-
-    // Make sure all threads load centroids in shared memory
     __syncthreads();
 
     if (idx < N) {
-        double smallest_distance = DBL_MAX;
-        int closest_centroid = -1;
+        float min_distance = 1e18f;
+        int closest_centroid = 0;
 
         for (int k = 0; k < K; k++) {
-            double current_distance = 0.0;
+            // Calculate the Euclidean distance between two points
+            float current_distance = 0.0f;
             for (int d = 0; d < D; d++) {
-                // Calculates the Euclidean distance between two points
-                double point_val = d_data[idx + (d * N)];
-                double centroid_val = shared_centroids[k * D + d];
-                current_distance += (point_val - centroid_val) * (point_val - centroid_val);
+                // We use row-major indexing
+                float diff = d_data[idx * D + d] - shared_centroids[k * D + d];
+                current_distance += diff * diff;
             }
-            if (current_distance < smallest_distance) {
-                smallest_distance = current_distance;
+            current_distance = sqrtf(current_distance);
+            if (current_distance < min_distance) {
+                min_distance = current_distance;
                 closest_centroid = k;
             }
         }
-        d_clusters[idx] = closest_centroid;
+
+        // If the centroid of a point has changed changed, we mark it and update the cluster in the next step
+        if (d_clusters[idx] != closest_centroid) {
+            d_clusters[idx] = closest_centroid;
+            *d_changed = 1; 
+        }
     }
 }
 
-// Calculating the centroids
-__global__ void centroid_sum(double *d_data, int *d_clusters, double *d_new_centroids, int *d_counts, int N, int D, int K)
+/**
+ * @brief Sum coordinates and update the number of points in each cluster so that we can compute new centroids in the next step
+ *
+ * @param d_data         Stores the data by row-major with [N * D]
+ * @param d_clusters     Stores the cluster ID for each point with [N]
+ * @param d_new_sums     Stores the sum of coordinates for each cluster with [K * D]
+ * @param d_counts       Stores the number of points in each cluster with [K]
+ * @param N              The number of points
+ * @param D              The number of dimensions
+ */
+__global__ void centroid_sum(float *d_data, int *d_clusters, float *d_new_sums, int *d_counts, int N, int D)
+{
+    // For each thread, it will process one data point and update the corresponding cluster's sum and count
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        // The cluster ID of the current data point
+        int cluster_id = d_clusters[idx];
+        // If this cluster ID is valid
+        if (cluster_id >= 0) {
+            // Atomically add the point's coordinates to the cluster's sum and increment the count
+            atomicAdd(&d_counts[cluster_id], 1);
+            for (int d = 0; d < D; d++) {
+                atomicAdd(&d_new_sums[cluster_id * D + d], d_data[idx * D + d]);
+            }
+        }
+    }
+}
+
+/**
+* @brief Update centroids by dividing the sum of coordinates by the count of points in each cluster
+*
+* @param d_centroids    Stores the centroids by row-major with [K * D]
+* @param d_new_sums     Stores the sum of coordinates for each cluster with [K * D]
+* @param d_counts       Stores the number of points in each cluster with [K]
+* @param K              The number of clusters 
+* @param D              The number of dimensions
+*/
+__global__ void update_centroids(float *d_centroids, float *d_new_sums, int *d_counts, int K, int D)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= N) return;
-    int cid = d_clusters[idx];
-    if (cid < 0 || cid >= K) return;
-    unsigned int active = __activemask();
-    unsigned group = __match_any_sync(active, cid);
-    int lane = threadIdx.x & 31;
-    int leader = __ffs(group) - 1;
-    for (int d = 0; d < D; ++d) {
-        double v = d_data[idx + (d * N)];
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            double other = __shfl_down_sync(active, v, offset);
-            int partner = lane + offset;
-            if (partner < 32 && ((group >> partner) & 1))
-                v += other;
+    // Each thread will update one coordinate of one centroid
+    if (idx < K * D) {
+        int cluster_id = idx / D;
+        int count = d_counts[cluster_id];
+        if (count > 0) {
+            d_centroids[idx] = d_new_sums[idx] / (float)count;
         }
-        if (lane==leader) atomicAdd(&d_new_centroids[cid * D + d], v);
     }
-    if (lane==leader) atomicAdd(&d_counts[cid], __popc(group));
 }
 
-__global__ void calculate_centroid(double *d_new_centroids, int *d_counts, int D, int K)
+float* kmeans_gpu_float(float *h_data, int num_points, int dim, int k, int max_iteration, int *h_clusters, int *finished_iterations)
 {
-    int cid = blockIdx.x;
-    int d = threadIdx.x;
-    if (cid >= K || d >= D) return;
-    int count = d_counts[cid];
-    if (count > 0) {
-        d_new_centroids[cid * D + d] /= count;
-    }
-    
-}
-
-double* kmeans_gpu(double *h_data, int num_points, int dim, int k, int max_iteration, int *h_clusters)
-{
-    double *h_initial_centroids = (double *)malloc((size_t)k * (size_t)dim * sizeof(double));
-    if (h_initial_centroids == NULL) {
-        return NULL;
-    }
-
-    for (int cid = 0; cid < k; cid++) {
-        int src_idx = cid % num_points;
+    float *host_initial_centroids = (float *)malloc((size_t)k * dim * sizeof(float));
+    for (int i = 0; i < k; i++) {
         for (int d = 0; d < dim; d++) {
-            h_initial_centroids[cid * dim + d] = h_data[src_idx + (d * num_points)];
+            host_initial_centroids[i * dim + d] = h_data[i * dim + d];
         }
     }
+    memset(h_clusters, -1, num_points * sizeof(int));
 
-    double *d_data;
-    int *d_clusters;
-    double *d_new_centroids;
-    double *d_centroids;
-    int *d_counts;
+    float *device_data, *device_centroids, *device_new_sums;
+    int *device_clusters, *device_counts, *device_changed;
+    
+    cudaMalloc(&device_data, num_points * dim * sizeof(float));
+    cudaMalloc(&device_centroids, k * dim * sizeof(float));
+    cudaMalloc(&device_new_sums, k * dim * sizeof(float));
+    cudaMalloc(&device_clusters, num_points * sizeof(int));
+    cudaMalloc(&device_counts, k * sizeof(int));
+    cudaMalloc(&device_changed, sizeof(int));
 
-    cudaMalloc(&d_data, num_points * dim * sizeof(double));
-    cudaMalloc(&d_clusters, num_points * sizeof(int));
-    cudaMalloc(&d_new_centroids, k * dim * sizeof(double));
-    cudaMalloc(&d_centroids, k * dim * sizeof(double));
-    cudaMalloc(&d_counts, k * sizeof(int));
+    cudaMemcpy(device_data, h_data, num_points * dim * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_centroids, host_initial_centroids, k * dim * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(device_clusters, h_clusters, num_points * sizeof(int), cudaMemcpyHostToDevice);
 
-    cudaMemcpy(d_data, h_data, num_points * dim * sizeof(double), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_centroids, h_initial_centroids, k * dim * sizeof(double), cudaMemcpyHostToDevice);
-
-    size_t shared_mem_size = k * dim * sizeof(double);
     int threadsPerBlock = 256;
-    int blocksPerGrid = (num_points + threadsPerBlock - 1) / threadsPerBlock;
+    int blocksPerGrid_Points = (num_points + threadsPerBlock - 1) / threadsPerBlock;
+    int blocksPerGrid_Centroids = (k * dim + threadsPerBlock - 1) / threadsPerBlock;
+    size_t shared_mem_size = k * dim * sizeof(float);
 
-    cudaStream_t stream_find, stream_accum;
-    cudaStreamCreateWithFlags(&stream_find, cudaStreamNonBlocking);
-    cudaStreamCreateWithFlags(&stream_accum, cudaStreamNonBlocking);
+    int iter;
+    int h_changed;
 
-    cudaEvent_t *evt_find = (cudaEvent_t *)malloc(max_iteration * sizeof(cudaEvent_t));
-    cudaEvent_t *evt_norm = (cudaEvent_t *)malloc(max_iteration * sizeof(cudaEvent_t));
-    for (int i = 0; i < max_iteration; i++) {
-        cudaEventCreate(&evt_find[i]);
-        cudaEventCreate(&evt_norm[i]);
+    for (iter = 0; iter < max_iteration; iter++) {
+        h_changed = 0;
+        cudaMemcpy(device_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice);
+
+        find_centroid<<<blocksPerGrid_Points, threadsPerBlock, shared_mem_size>>>(
+            device_data, device_centroids, device_clusters, device_changed, num_points, dim, k);
+        cudaDeviceSynchronize();
+
+        cudaMemcpy(&h_changed, device_changed, sizeof(int), cudaMemcpyDeviceToHost);
+        if (h_changed == 0) {
+            break;
+        }
+
+        cudaMemset(device_counts, 0, k * sizeof(int));
+        cudaMemset(device_new_sums, 0, k * dim * sizeof(float));
+
+        centroid_sum<<<blocksPerGrid_Points, threadsPerBlock>>>(
+            device_data, device_clusters, device_new_sums, device_counts, num_points, dim);
+        cudaDeviceSynchronize();
+
+        update_centroids<<<blocksPerGrid_Centroids, threadsPerBlock>>>(
+            device_centroids, device_new_sums, device_counts, k, dim);
+        cudaDeviceSynchronize();
     }
-    // OMP dependency tokens
-    int *token_find  = (int *)malloc(max_iteration * sizeof(int));
-    int *token_reset = (int *)malloc(max_iteration * sizeof(int));
-    int *token_accum = (int *)malloc(max_iteration * sizeof(int));
-    int ready = 1;
 
-    #pragma omp parallel
-    #pragma omp single
-    {
-        int *prev_accum = &ready;
+    if (finished_iterations != NULL) {
+        *finished_iterations = iter;
+    }
 
-        for (int i = 0; i < max_iteration; i++) {
-            // --- TASK FIND(i) ---
-            #pragma omp task firstprivate(i, prev_accum) \
-                depend(in: *prev_accum) depend(out: token_find[i])
+    float *h_final_centroids = (float *)malloc(k * dim * sizeof(float));
+    cudaMemcpy(h_final_centroids, device_centroids, k * dim * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_clusters, device_clusters, num_points * sizeof(int), cudaMemcpyDeviceToHost);
+
+    free(host_initial_centroids);
+    cudaFree(device_data);
+    cudaFree(device_centroids);
+    cudaFree(device_new_sums);
+    cudaFree(device_clusters);
+    cudaFree(device_counts);
+    cudaFree(device_changed);
+
+    return h_final_centroids;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming GPU K-Means: with GPU memory auto-adaptation.
+// Fast path: all data fits on GPU.
+// Fallback: chunked streaming pipeline when data exceeds GPU memory.
+// ---------------------------------------------------------------------------
+float* kmeans_gpu_streaming_float(float *h_data, int num_points, int dim, int k, int max_iteration,
+                                  int *h_clusters, int *finished_iterations)
+{
+    size_t full_data_bytes_f = (size_t)num_points * dim * sizeof(float);
+
+    // Initialize cluster assignments to -1 (unassigned)
+    memset(h_clusters, -1, (size_t)num_points * sizeof(int));
+
+    // --- Persistent device arrays ---
+    float *d_centroids, *d_new_sums;
+    int    *d_clusters_dev, *d_counts, *d_changed;
+
+    cudaMalloc(&d_centroids,    (size_t)k * dim * sizeof(float));
+    cudaMalloc(&d_new_sums,     (size_t)k * dim * sizeof(float));
+    cudaMalloc(&d_clusters_dev, (size_t)num_points * sizeof(int));
+    cudaMalloc(&d_counts,       (size_t)k * sizeof(int));
+    cudaMalloc(&d_changed,      sizeof(int));
+
+    cudaMemset(d_clusters_dev, -1, (size_t)num_points * sizeof(int));
+    cudaMemcpy(d_centroids, h_data, (size_t)k * dim * sizeof(float), cudaMemcpyHostToDevice);
+
+    int threadsPerBlock         = THREADS_PER_BLOCK;
+    int blocksPerGrid_Points    = (num_points + threadsPerBlock - 1) / threadsPerBlock;
+    int blocksPerGrid_Centroids = (k * dim + threadsPerBlock - 1) / threadsPerBlock;
+    size_t shared_mem_size      = (size_t)k * dim * sizeof(float);
+
+    int iter;
+    int h_changed;
+
+    // --- Try to allocate full dataset on GPU ---
+    float *d_data_full = NULL;
+    cudaError_t alloc_err = cudaMalloc(&d_data_full, full_data_bytes_f);
+    int gpu_resident = (alloc_err == cudaSuccess);
+
+    if (gpu_resident) {
+        // ===== FAST PATH: data fits in GPU memory — copy once, iterate on GPU =====
+        fprintf(stderr, "[streaming] GPU-resident fast path: %.1f MB on device\n",
+                (double)full_data_bytes_f / (1024.0 * 1024.0));
+
+        cudaMemcpy(d_data_full, h_data, full_data_bytes_f, cudaMemcpyHostToDevice);
+
+        for (iter = 0; iter < max_iteration; iter++) {
+            h_changed = 0;
+            cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice);
+
+            find_centroid<<<blocksPerGrid_Points, threadsPerBlock, shared_mem_size>>>(
+                d_data_full, d_centroids, d_clusters_dev, d_changed, num_points, dim, k);
+            cudaDeviceSynchronize();
+
+            cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
+            if (h_changed == 0) break;
+
+            cudaMemset(d_counts,   0, (size_t)k * sizeof(int));
+            cudaMemset(d_new_sums, 0, (size_t)k * dim * sizeof(float));
+
+            centroid_sum<<<blocksPerGrid_Points, threadsPerBlock>>>(
+                d_data_full, d_clusters_dev, d_new_sums, d_counts, num_points, dim);
+            cudaDeviceSynchronize();
+
+            update_centroids<<<blocksPerGrid_Centroids, threadsPerBlock>>>(
+                d_centroids, d_new_sums, d_counts, k, dim);
+            cudaDeviceSynchronize();
+        }
+
+        cudaFree(d_data_full);
+    } else {
+        // ===== FALLBACK: chunked streaming pipeline (data too large for GPU) =====
+        cudaFree(d_data_full);
+        d_data_full = NULL;
+
+        int chunk_size = 100000;  // Default chunk size for fallback
+        int num_chunks = (num_points + chunk_size - 1) / chunk_size;
+        size_t chunk_data_bytes = (size_t)chunk_size * dim * sizeof(float);
+
+        fprintf(stderr, "[streaming] Chunked fallback: %d chunks of %d rows\n",
+                num_chunks, chunk_size);
+
+        float *d_buffers[NUM_BUFFERS];
+        cudaStream_t streams[NUM_BUFFERS];
+        for (int i = 0; i < NUM_BUFFERS; i++) {
+            cudaMalloc(&d_buffers[i], chunk_data_bytes);
+            cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
+        }
+
+        int deviceToken[NUM_BUFFERS];
+
+        #pragma omp parallel
+        {
+            #pragma omp single
             {
-                if (i > 0) cudaStreamWaitEvent(stream_find, evt_norm[i - 1], 0);
-                find_centroid<<<blocksPerGrid, threadsPerBlock, shared_mem_size, stream_find>>>(
-                    d_data, d_centroids, d_clusters, num_points, dim, k);
-                cudaEventRecord(evt_find[i], stream_find);
-            }
+                for (iter = 0; iter < max_iteration; iter++) {
+                    h_changed = 0;
+                    cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice);
+                    cudaMemset(d_counts,   0, (size_t)k * sizeof(int));
+                    cudaMemset(d_new_sums, 0, (size_t)k * dim * sizeof(float));
+                    memset(deviceToken, 0, sizeof(deviceToken));
 
-            // --- TASK RESET(i) ---
-            #pragma omp task firstprivate(i, prev_accum) \
-                depend(in: *prev_accum) depend(out: token_reset[i])
-            {
-                cudaMemsetAsync(d_new_centroids, 0, (size_t)k * dim * sizeof(double), stream_accum);
-                cudaMemsetAsync(d_counts,        0, (size_t)k        * sizeof(int),    stream_accum);
-            }
+                    for (int c = 0; c < num_chunks; c++) {
+                        int slot     = c % NUM_BUFFERS;
+                        int p_offset = c * chunk_size;
+                        int cn       = (c < num_chunks - 1) ? chunk_size
+                                                            : (num_points - p_offset);
 
-            // --- TASK ACCUM(i) ---
-            #pragma omp task firstprivate(i) \
-                depend(in: token_find[i], token_reset[i]) depend(out: token_accum[i])
-            {
-                cudaStreamWaitEvent(stream_accum, evt_find[i], 0);
-                centroid_sum<<<blocksPerGrid, threadsPerBlock, 0, stream_accum>>>(
-                    d_data, d_clusters, d_new_centroids, d_counts, num_points, dim, k);
-                calculate_centroid<<<k, dim, 0, stream_accum>>>(d_new_centroids, d_counts, dim, k);
-                cudaMemcpyAsync(d_centroids, d_new_centroids,
-                                (size_t)k * dim * sizeof(double), cudaMemcpyDeviceToDevice, stream_accum);
-                cudaEventRecord(evt_norm[i], stream_accum);
-            }
+                        #pragma omp task depend(inout: deviceToken[slot]) \
+                                         firstprivate(slot, p_offset, cn)
+                        {
+                            size_t bytes = (size_t)cn * dim * sizeof(float);
+                            int blks = (cn + threadsPerBlock - 1) / threadsPerBlock;
 
-            prev_accum = &token_accum[i];
+                            cudaMemcpyAsync(d_buffers[slot],
+                                            h_data + (size_t)p_offset * dim,
+                                            bytes, cudaMemcpyHostToDevice, streams[slot]);
+
+                            find_centroid<<<blks, threadsPerBlock,
+                                           shared_mem_size, streams[slot]>>>(
+                                d_buffers[slot], d_centroids,
+                                d_clusters_dev + p_offset,
+                                d_changed, cn, dim, k);
+
+                            centroid_sum<<<blks, threadsPerBlock, 0, streams[slot]>>>(
+                                d_buffers[slot], d_clusters_dev + p_offset,
+                                d_new_sums, d_counts, cn, dim);
+
+                            cudaStreamSynchronize(streams[slot]);
+                        }
+                    }
+
+                    #pragma omp taskwait
+                    cudaDeviceSynchronize();
+
+                    cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
+                    if (h_changed == 0) break;
+
+                    update_centroids<<<blocksPerGrid_Centroids, threadsPerBlock>>>(
+                        d_centroids, d_new_sums, d_counts, k, dim);
+                    cudaDeviceSynchronize();
+                }
+            }
+        }
+
+        for (int i = 0; i < NUM_BUFFERS; i++) {
+            cudaFree(d_buffers[i]);
+            cudaStreamDestroy(streams[i]);
         }
     }
 
-    cudaDeviceSynchronize();
+    if (finished_iterations) *finished_iterations = iter;
 
-    double *h_centroids = (double *)malloc((size_t)k * (size_t)dim * sizeof(double));
-    if (h_centroids != NULL) {
-        cudaMemcpy(h_centroids, d_centroids, k * dim * sizeof(double), cudaMemcpyDeviceToHost);
-    }
-    cudaMemcpy(h_clusters, d_clusters, num_points * sizeof(int), cudaMemcpyDeviceToHost);
+    // --- Copy final results back ---
+    float *h_final_centroids = (float *)malloc((size_t)k * dim * sizeof(float));
+    cudaMemcpy(h_final_centroids, d_centroids, (size_t)k * dim * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_clusters, d_clusters_dev, (size_t)num_points * sizeof(int), cudaMemcpyDeviceToHost);
 
-    for (int i = 0; i < max_iteration; i++) {
-        cudaEventDestroy(evt_find[i]);
-        cudaEventDestroy(evt_norm[i]);
-    }
-    cudaStreamDestroy(stream_find);
-    cudaStreamDestroy(stream_accum);
-
-    free(token_find);
-    free(token_reset);
-    free(token_accum);
-    free(h_initial_centroids);
-    cudaFree(d_counts);
-    cudaFree(d_new_centroids);
+    // --- Cleanup ---
     cudaFree(d_centroids);
-    cudaFree(d_clusters);
-    cudaFree(d_data);
+    cudaFree(d_new_sums);
+    cudaFree(d_clusters_dev);
+    cudaFree(d_counts);
+    cudaFree(d_changed);
 
-    return h_centroids;
+    return h_final_centroids;
 }
