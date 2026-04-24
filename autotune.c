@@ -3,7 +3,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "OptimaKmeans/optima_kmeans.h"
+#include "OptimaKmeans/optima_kmeans_gpu.h"
 
 typedef struct {
     const char *data_path;

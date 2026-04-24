@@ -65,3 +65,10 @@ data/
 autotune_cache.json
 src/CMakeLists.txt
 CMakeLists.txt
+
+dataset/
+
+external_baseline/
+
+*.csv
+*.png

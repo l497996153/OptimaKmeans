@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 rm -rf build
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DGPU_VERSION="${GPU_VERSION}" ..
+cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TARGET=gpu -DGPU_VERSION="${GPU_VERSION}" ..
 make
 
 cd "$SCRIPT_DIR"

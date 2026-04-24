@@ -1,5 +1,5 @@
 // Wrapper function to run k-means algorithm on a given dataset
-#include "OptimaKmeans/optima_kmeans.h"
+#include "OptimaKmeans/optima_kmeans_gpu.h"
 #include "dataloader.h"
 #include "kmeans.h"
 #include <stdlib.h>

@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
-#include "OptimaKmeans/optima_kmeans.h"
+#include "OptimaKmeans/optima_kmeans_gpu.h"
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
@@ -16,7 +16,7 @@ int main(int argc, char* argv[]) {
     int n, d;
 
     // Load data from a csv file
-    if (optima_load_data_csv("/afs/ece.cmu.edu/usr/zhuoqili/Private/project/dataset/data/f1_data/processed/final_processed.csv", &data, &n, &d) != 0) {
+    if (optima_load_data_csv("/afs/ece.cmu.edu/usr/zhuoqili/Private/OptimaKmeans/dataset/data/f1_data/processed/final_processed.csv", &data, &n, &d) != 0) {
         fprintf(stderr, "Failed to load data from CSV file\n");
         return 1;
     }
@@ -26,7 +26,7 @@ int main(int argc, char* argv[]) {
 
     // Run k-means
     int k = 5; // number of clusters
-    int max_iter = 10000;
+    int max_iter = 500;
     int* clusters;
     optima_malloc_clusters(&clusters, n);
 

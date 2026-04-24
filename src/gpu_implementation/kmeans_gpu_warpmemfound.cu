@@ -4,9 +4,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <float.h>
 
 /**
  * Assign points to nearest centroid and track if any assignments changed
+ *
+ * Warp/sub-warp version:
+ * - If D <= 8, one warp handles 4 points
+ * - If D <= 16, one warp handles 2 points
+ * - Otherwise, one warp handles 1 point
  *
  * @param device_data                 Stores the data by column major order on the GPU
  * @param device_centroids            Stores the centroids by row major order on the GPU
@@ -16,36 +22,91 @@
  * @param dimensions                  The number of dimensions
  * @param K                           The number of clusters
  */
-__global__ void find_centroid(double *device_data, double *device_centroids, int *device_clusters, int *device_cluster_changed, int N, int dimensions, int K)
+__global__ void find_centroid(
+    double *device_data,
+    double *device_centroids,
+    int *device_clusters,
+    int *device_cluster_changed,
+    int N,
+    int dimensions,
+    int K)
 {
     extern __shared__ double shared_centroids[];
 
     int tid = threadIdx.x;
-    int idx = blockIdx.x * blockDim.x + tid;
+    int lane = tid & 31;
 
+    // Load current centroids into shared memory
     for (int i = tid; i < K * dimensions; i += blockDim.x) {
         shared_centroids[i] = device_centroids[i];
     }
     __syncthreads();
 
-    if (idx < N) {
-        double min_distance = 1e18;
-        int closest_centroid = 0;
+    // Decide how many points a warp handles based on dimensions
+    int points_per_warp = (dimensions <= 8) ? 4 : ((dimensions <= 16) ? 2 : 1);
+    int group_size = 32 / points_per_warp;
 
-        for (int k = 0; k < K; k++) {
-            double current_distance = 0.0;
-            for (int d = 0; d < dimensions; ++d) {
-                double diff = device_data[idx + (d * N)] - shared_centroids[k * dimensions + d];
-                current_distance += diff * diff;
+    int group_id_in_warp = lane / group_size;
+    int lane_in_group = lane % group_size;
+
+    // Warp-based point indexing
+    int global_thread = blockIdx.x * blockDim.x + tid;
+    int global_warp = global_thread >> 5;
+    int point_idx = global_warp * points_per_warp + group_id_in_warp;
+
+    if (point_idx >= N) {
+        return;
+    }
+
+    // Mask for shuffle inside each sub-warp
+    unsigned int group_mask;
+    if (group_size == 32) {
+        group_mask = 0xffffffffu;
+    } else {
+        group_mask = ((1u << group_size) - 1u) << (group_id_in_warp * group_size);
+    }
+
+    double best_dist = DBL_MAX;
+    int best_k = 0;
+
+    for (int k = 0; k < K; k++) {
+        double partial_sum = 0.0;
+
+        if (group_size < 32) {
+            // Small-D case: one thread handles one dimension
+            if (lane_in_group < dimensions) {
+                double point_val = device_data[point_idx + lane_in_group * N];
+                double centroid_val = shared_centroids[k * dimensions + lane_in_group];
+                double diff = point_val - centroid_val;
+                partial_sum = diff * diff;
             }
-            if (current_distance < min_distance) {
-                min_distance = current_distance;
-                closest_centroid = k;
+        } else {
+            // Large-D case: full warp handles one point
+            for (int d = lane; d < dimensions; d += 32) {
+                double point_val = device_data[point_idx + d * N];
+                double centroid_val = shared_centroids[k * dimensions + d];
+                double diff = point_val - centroid_val;
+                partial_sum += diff * diff;
             }
         }
 
-        if (device_clusters[idx] != closest_centroid) {
-            device_clusters[idx] = closest_centroid;
+        // Reduce inside sub-warp
+        for (int offset = group_size >> 1; offset > 0; offset >>= 1) {
+            partial_sum += __shfl_down_sync(group_mask, partial_sum, offset);
+        }
+
+        if (lane_in_group == 0) {
+            if (partial_sum < best_dist) {
+                best_dist = partial_sum;
+                best_k = k;
+            }
+        }
+    }
+
+    // Only group leader writes result
+    if (lane_in_group == 0) {
+        if (device_clusters[point_idx] != best_k) {
+            device_clusters[point_idx] = best_k;
             *device_cluster_changed = 1;
         }
     }
@@ -64,7 +125,14 @@ __global__ void find_centroid(double *device_data, double *device_centroids, int
  * @param dimensions The dimensions of data
  * @param K The number of clusters
  */
-__global__ void centroid_sum(double *device_data, int *device_clusters, double *device_new_sums, int *device_num_point_each_cluster, int N, int dimensions, int K)
+__global__ void centroid_sum(
+    double *device_data,
+    int *device_clusters,
+    double *device_new_sums,
+    int *device_num_point_each_cluster,
+    int N,
+    int dimensions,
+    int K)
 {
     extern __shared__ unsigned char shared_buffer[];
 
@@ -205,8 +273,19 @@ double* kmeans_gpu(double *h_data, int num_points, int dimension, int k, int max
     cudaMemcpy(device_clusters, host_clusters, num_points * sizeof(int), cudaMemcpyHostToDevice);
 
     int thread_per_block = (threads_per_block > 0) ? threads_per_block : 256;
-    int blocksPerGrid_Points = (num_points + thread_per_block - 1) / thread_per_block;
-    size_t shared_mem_size = (size_t)k * dimension * sizeof(double);
+    int warps_per_block = thread_per_block / 32;
+
+    int points_per_warp = (dimension <= 8) ? 4 : ((dimension <= 16) ? 2 : 1);
+    int points_per_block_find = warps_per_block * points_per_warp;
+
+    int blocksPerGrid_Find = (num_points + points_per_block_find - 1) / points_per_block_find;
+    int blocksPerGrid_Sum  = (num_points + thread_per_block - 1) / thread_per_block;
+
+    size_t shared_mem_find = (size_t)k * dimension * sizeof(double);
+
+    size_t shared_counts_bytes = (size_t)k * sizeof(int);
+    size_t shared_sums_offset  = (shared_counts_bytes + sizeof(double) - 1) & ~(sizeof(double) - 1);
+    size_t shared_mem_sum      = shared_sums_offset + (size_t)k * dimension * sizeof(double);
 
     int iteration;
     int host_changed;
@@ -215,8 +294,14 @@ double* kmeans_gpu(double *h_data, int num_points, int dimension, int k, int max
         host_changed = 0;
         cudaMemcpy(device_cluster_changed, &host_changed, sizeof(int), cudaMemcpyHostToDevice);
 
-        find_centroid<<<blocksPerGrid_Points, thread_per_block, shared_mem_size>>>(
-            device_data, device_centroids, device_clusters, device_cluster_changed, num_points, dimension, k);
+        find_centroid<<<blocksPerGrid_Find, thread_per_block, shared_mem_find>>>(
+            device_data,
+            device_centroids,
+            device_clusters,
+            device_cluster_changed,
+            num_points,
+            dimension,
+            k);
         cudaDeviceSynchronize();
 
         cudaMemcpy(&host_changed, device_cluster_changed, sizeof(int), cudaMemcpyDeviceToHost);
@@ -228,15 +313,21 @@ double* kmeans_gpu(double *h_data, int num_points, int dimension, int k, int max
         cudaMemset(device_num_point_each_cluster, 0, k * sizeof(int));
         cudaMemset(device_new_sums, 0, k * dimension * sizeof(double));
 
-        size_t shared_counts_bytes = (size_t)k * sizeof(int);
-        size_t shared_sums_offset = (shared_counts_bytes + sizeof(double) - 1) & ~(sizeof(double) - 1);
-        size_t centroid_sum_shared_mem = shared_sums_offset + (size_t)k * dimension * sizeof(double);
-
-        centroid_sum<<<blocksPerGrid_Points, thread_per_block, centroid_sum_shared_mem>>>(
-            device_data, device_clusters, device_new_sums, device_num_point_each_cluster, num_points, dimension, k);
+        centroid_sum<<<blocksPerGrid_Sum, thread_per_block, shared_mem_sum>>>(
+            device_data,
+            device_clusters,
+            device_new_sums,
+            device_num_point_each_cluster,
+            num_points,
+            dimension,
+            k);
         cudaDeviceSynchronize();
 
-        calculate_centroid<<<k, dimension>>>(device_new_sums, device_num_point_each_cluster, dimension, k);
+        calculate_centroid<<<k, dimension>>>(
+            device_new_sums,
+            device_num_point_each_cluster,
+            dimension,
+            k);
         cudaDeviceSynchronize();
 
         cudaMemcpy(device_centroids, device_new_sums, k * dimension * sizeof(double), cudaMemcpyDeviceToDevice);

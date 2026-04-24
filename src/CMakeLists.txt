@@ -1,18 +1,5 @@
-if(NOT DEFINED GPU_VERSION)
-    set(GPU_VERSION "warp")
-endif()
-
-if(GPU_VERSION STREQUAL "base")
-    set(GPU_SRC gpu_implementation/kmeans_gpu_base.cu)
-elseif(GPU_VERSION STREQUAL "warp")
-    set(GPU_SRC gpu_implementation/kmeans_gpu_warp.cu)
-elseif(GPU_VERSION STREQUAL "warpmem")
-    set(GPU_SRC gpu_implementation/kmeans_gpu_warpmem.cu)
+if(BUILD_TARGET STREQUAL "gpu")
+    add_subdirectory(gpu_implementation)
 else()
-    message(FATAL_ERROR "Unknown GPU_VERSION: ${GPU_VERSION} (expected base|warp|warpmem)")
+    add_subdirectory(cpu_implementation)
 endif()
-
-message(STATUS "Building GPU version: ${GPU_VERSION} (${GPU_SRC})")
-
-add_library(optima_kmeans optima_kmeans.c dataloader.c kmeans.c ${GPU_SRC})
-target_include_directories(optima_kmeans PUBLIC ${CMAKE_SOURCE_DIR}/include)

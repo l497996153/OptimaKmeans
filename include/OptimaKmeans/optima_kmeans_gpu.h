@@ -1,6 +1,6 @@
 // Header file for OptimaKmeans library
-#ifndef OPTIMA_KMEANS_H
-#define OPTIMA_KMEANS_H
+#ifndef OPTIMA_KMEANS_GPU_H
+#define OPTIMA_KMEANS_GPU_H
 
 typedef struct {
     double* centroids;
@@ -25,4 +25,4 @@ KMeansResult optima_kmeans_gpu(double *data, int num_points, int dim, int k, int
 KMeansResult optima_kmeans_gpu_threads(double *data, int num_points, int dim, int k, int max_iteration,
                                        int *clusters, int threads_per_block);
 
-#endif // OPTIMA_KMEANS_H
+#endif

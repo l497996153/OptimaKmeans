@@ -1,113 +1,93 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <time.h>
 #include "kmeans.h"
 #include <string.h>
+#include <omp.h>
 
-/**
- * @brief Calculates the Euclidean distance between two points
- *
- * @param p1 Point one's feature vector
- * @param p2 Point two's feature vector
- * @param dim Number of dimensions (features) per point
- * @return double The Euclidean distance between the two points
- */
-static double dist(double *p1, double *p2, int dim)
+static float dist_sq(float *p1, float *p2, int dim)
 {
-    double sum = 0;
-    // Euclidean distance: sqrt((x1-x2)^2 + (y1-y2)^2 + ...)
+    float sum = 0;
     for (int i = 0; i < dim; i++)
     {
         sum += (p1[i] - p2[i]) * (p1[i] - p2[i]);
     }
-    return sqrt(sum);
+    return sum;
 }
 
-double *kmeans(double *data, int num_points, int dim, int k, int max_iteration, int *clusters)
+float *kmeans(float *data, int num_points, int dim, int k, int max_iteration, int *clusters, int *iter_converge)
 {
-    // Allocate memory for centroids
-    // centroids is a 1D array [k * dim]
-    double *centroids = malloc(k * dim * sizeof(double));
+    float *centroids = malloc(k * dim * sizeof(float));
     int *counts = malloc(k * sizeof(int));
-    double *new_sums = malloc(k * dim * sizeof(double));
+    float *new_sums = malloc(k * dim * sizeof(float));
     memset(clusters, -1, num_points * sizeof(int));
     int centroid_changed = 0;
-
-    // Pick random points as starting centroids
-    // srand(time(NULL));
+    *iter_converge = max_iteration;
 
     for (int i = 0; i < k; i++)
     {
-        int r = rand() % num_points;
         for (int d = 0; d < dim; d++)
         {
-            centroids[i * dim + d] = data[r * dim + d];
+            centroids[i * dim + d] = data[i * dim + d];
         }
     }
 
-    #pragma omp parallel 
+    #pragma omp parallel
     {
         for (int iter = 0; iter < max_iteration; iter++)
         {
             #pragma omp single
-            centroid_changed = 0;
-            
+            {
+                centroid_changed = 0;
+                memset(counts, 0, k * sizeof(int));
+                memset(new_sums, 0, k * dim * sizeof(float));
+            }
+
+            // --- Assignment step ---
             #pragma omp for reduction(| : centroid_changed)
             for (int i = 0; i < num_points; i++)
             {
-                double min_d = 1e18;
-                // The index of the closest centroid for each point
+                float min_d = 1e18f;
                 int closest_centroid = 0;
-                // Calculate distance of this point to each centroid and find the closest one
                 for (int centroid = 0; centroid < k; centroid++)
                 {
-                    double distance = dist(&data[i * dim], &centroids[centroid * dim], dim);
+                    float distance = dist_sq(&data[i * dim], &centroids[centroid * dim], dim);
                     if (distance < min_d)
                     {
                         min_d = distance;
                         closest_centroid = centroid;
                     }
                 }
-                // If the closest centroid is different from the current cluster assignment, update it
                 if (clusters[i] != closest_centroid)
                 {
                     clusters[i] = closest_centroid;
                     centroid_changed = 1;
                 }
             }
-            
 
-            // If no points changed clusters, we have converged
-            int stop = 0;
-            #pragma omp single
+            if (!centroid_changed)
             {
-                if (!centroid_changed)
+                #pragma omp single
                 {
+                    *iter_converge = iter;
                     printf("Converged at iteration %d\n", iter);
-                    stop = 1;
                 }
-                memset(counts, 0, k * sizeof(int));
-                memset(new_sums, 0, k * dim * sizeof(double));
-            }
-
-            #pragma omp barrier
-            if (stop) {
                 break;
             }
-            
-            // Calculate new centroids
-            #pragma omp for schedule(static) reduction(+ : counts[ : k], new_sums[ : k * dim])
+
+            #pragma omp for schedule(static)
             for (int i = 0; i < num_points; i++)
             {
                 int cid = clusters[i];
                 for (int d = 0; d < dim; d++)
                 {
+                    #pragma omp atomic
                     new_sums[cid * dim + d] += data[i * dim + d];
                 }
+                #pragma omp atomic
                 counts[cid]++;
             }
-            
+
             #pragma omp for schedule(static)
             for (int centroid = 0; centroid < k; centroid++)
             {
@@ -117,12 +97,10 @@ double *kmeans(double *data, int num_points, int dim, int k, int max_iteration, 
                         centroids[centroid * dim + d] = new_sums[centroid * dim + d] / counts[centroid];
                 }
             }
-            
         }
-    }   
+    }
 
     free(new_sums);
     free(counts);
     return centroids;
-
 }

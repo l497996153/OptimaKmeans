@@ -30,6 +30,7 @@ __global__ void find_centroid(double *device_data, double *device_centroids, int
     for (int i = tid; i < K * dimensions; i += blockDim.x) {
         shared_centroids[i] = device_centroids[i];
     }
+    
     __syncthreads();
 
     // A thread will find the closest centroid for one data point
