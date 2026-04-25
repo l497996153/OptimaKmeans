@@ -1,4 +1,4 @@
-if(BUILD_TARGET STREQUAL "gpu")
+if(Build_Assign STREQUAL "gpu")
     add_subdirectory(gpu_implementation)
 else()
     add_subdirectory(cpu_implementation)

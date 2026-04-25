@@ -1,4 +1,3 @@
-// Header file for OptimaKmeans library
 #ifndef OPTIMA_KMEANS_GPU_H
 #define OPTIMA_KMEANS_GPU_H
 

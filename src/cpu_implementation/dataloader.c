@@ -39,7 +39,9 @@ int load_data_bin(const char* filename, float** data, int* n, int* d) {
 }
 
 
-// Load NxD data from a CSV file into data
+// Load NxD data from a CSV file into data.
+// Skips the header row and the first two columns (matches the
+// GPU loader, so the CPU pipeline can read final_processed.csv directly).
 // Returns 0 on success, -1 on failure
 int load_data_csv(const char* filename, float** data, int* n, int* d) {
     FILE* file = fopen(filename, "r");
@@ -47,49 +49,58 @@ int load_data_csv(const char* filename, float** data, int* n, int* d) {
         return -1;
     }
     char line[MAX_LINE_LEN];
+
+    // Skip the header line
+    if (!fgets(line, sizeof(line), file)) {
+        fclose(file);
+        return -1;
+    }
+
     *n = 0;
     *d = 0;
+    int first_data_line = 1;
 
-    int first_line = 1;
-    int dim = 0;
-    // Count n and d
+    long data_start_pos = ftell(file);
     while (fgets(line, sizeof(line), file)) {
         (*n)++;
-        int col_count = 0;
-        char* tmp = strdup(line);
-        char* token = strtok(tmp, ",");
-        while (token) {
-            col_count++;
-            token = strtok(NULL, ",");
-        }
-        free(tmp);
-        if (first_line) {
-            dim = col_count;
-            *d = col_count;
-            first_line = 0;
-        } else if (col_count != dim) {
-            fclose(file);
-            fprintf(stderr, "Inconsistent column count in CSV file\n");
-            return -1;
+        if (first_data_line) {
+            int col_count = 0;
+            char* tmp = strdup(line);
+            char* token = strtok(tmp, ",");
+            while (token) {
+                col_count++;
+                token = strtok(NULL, ",");
+            }
+            free(tmp);
+            *d = col_count - 2;
+            first_data_line = 0;
         }
     }
-    rewind(file);
+
+    fseek(file, data_start_pos, SEEK_SET);
 
     // Allocate memory for data
-    *data = (float*)malloc((*n) * (*d) * sizeof(float));
+    *data = (float*)malloc((size_t)(*n) * (size_t)(*d) * sizeof(float));
     if (!*data) {
         fclose(file);
         return -1;
     }
 
-    // Read the data from the file
+    // Read the data, discarding the first two columns of each row
     int i = 0;
-    while (fgets(line, sizeof(line), file)) {
+    while (fgets(line, sizeof(line), file) && i < *n) {
         char* token = strtok(line, ",");
-        int j = 0;
-        while (token && j < *d) {
-            (*data)[i * (*d) + j] = strtof(token, NULL);
+
+        if (token) {
             token = strtok(NULL, ",");
+        }
+
+        int j = 0;
+        while (j < *d) {
+            token = strtok(NULL, ",\n\r");
+            if (token) {
+                (*data)[i * (*d) + j] = strtof(token, NULL);
+            }
             j++;
         }
         i++;

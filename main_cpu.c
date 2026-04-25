@@ -19,7 +19,7 @@ int main(int argc, char* argv[]) {
 
     // Load data from a csv file
     // Skip 1 header row + 2 leading columns (Driver, LapNumber) to match kmeans_base.py
-    if (optima_load_data_csv("/afs/ece.cmu.edu/usr/zhuoqili/Private/OptimaKmeans/dataset/data/f1_data/processed/final_processed_adjusted.csv", &data, &n, &d) != 0) {
+    if (optima_load_data_csv("/afs/ece.cmu.edu/usr/zhuoqili/Private/OptimaKmeans/dataset/data/f1_data/processed/final_processed.csv", &data, &n, &d) != 0) {
         fprintf(stderr, "Failed to load data from CSV file\n");
         return 1;
     }

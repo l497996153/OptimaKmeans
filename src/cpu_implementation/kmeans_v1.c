@@ -111,7 +111,6 @@ float *kmeans(float *data, int num_points, int dim, int k, int max_iteration, in
                     }
                 }
             
-                // --- Recompute centroids from sums/counts ---
                 #pragma omp for schedule(static)
                 for (int centroid = 0; centroid < k; centroid++)
                 {

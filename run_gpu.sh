@@ -3,21 +3,21 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # GPU version: base | warp | warpmem | warpmemfound | atomicshare | test2 | test3  (default: warp)
-GPU_VERSION="${1:-warp}"
+G_version="${1:-warp}"
 
 cd "$SCRIPT_DIR"
 rm -rf build
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TARGET=gpu -DGPU_VERSION="${GPU_VERSION}" ..
+cmake -DCMAKE_BUILD_TYPE=Release -DBuild_Assign=gpu -DG_version="${G_version}" ..
 make
 
 cd "$SCRIPT_DIR"
-OUTPUT="results_gpu_${GPU_VERSION}.csv"
+OUTPUT="results_gpu_${G_version}.csv"
 echo "percentage,time,iters,time per iterations,inertia" > "$OUTPUT"
 
 for percentage in 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0; do
-    echo "=== [${GPU_VERSION}] Running with ${percentage} of data ==="
+    echo "=== [${G_version}] Running with ${percentage} of data ==="
     output=$(./build/example "$percentage")
     line=$(echo "$output" | grep "Time:")
     time_ms=$(echo "$line" | sed -n 's/.*Time: \([0-9.]*\) ms.*/\1/p')

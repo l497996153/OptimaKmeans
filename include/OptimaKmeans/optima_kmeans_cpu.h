@@ -1,4 +1,3 @@
-// Header file for OptimaKmeans library (CPU build, single precision)
 #ifndef OPTIMA_KMEANS_CPU_H
 #define OPTIMA_KMEANS_CPU_H
 
@@ -8,4 +7,4 @@ float* optima_kmeans(float *points, int num_points, int dim, int k, int max_iter
 void optima_free_data(float* data, float* centroids, int* clusters);
 void optima_malloc_clusters(int** clusters, int n);
 
-#endif // OPTIMA_KMEANS_CPU_H
+#endif 

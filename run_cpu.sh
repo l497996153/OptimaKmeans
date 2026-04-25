@@ -4,18 +4,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Update-step version for kmeans_v1.c (1=thread-local, 2=atomic, 3=reduction).
 # Usage: ./run.sh [version]  (default: 3)
-UPDATE_VERSION="${1:-3}"
+C_version="${1:-3}"
 
 cd "$SCRIPT_DIR"
-# Clean build dir so the new -DUPDATE_VERSION actually takes effect
+# Clean build dir so the new -DC_version actually takes effect
 rm -rf build
 mkdir -p build
 cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_TARGET=cpu -DUPDATE_VERSION="${UPDATE_VERSION}" ..
+cmake -DCMAKE_BUILD_TYPE=Release -DBuild_Assign=cpu -DC_version="${C_version}" ..
 make
 
 cd "$SCRIPT_DIR"
-OUTPUT="results_v${UPDATE_VERSION}.csv"
+OUTPUT="results_v${C_version}.csv"
 echo "percentage,time,iters,time per iterations,inertia" > "$OUTPUT"
 
 for percentage in 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0; do
