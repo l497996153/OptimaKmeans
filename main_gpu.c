@@ -25,7 +25,7 @@ int main(int argc, char* argv[]) {
     n = (int)(n * percentage);
 
     // Run k-means
-    int k = 5; // number of clusters
+    int k = 10;
     int max_iter = 500;
     int* clusters;
     optima_malloc_clusters(&clusters, n);
