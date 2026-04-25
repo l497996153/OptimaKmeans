@@ -36,3 +36,21 @@ python baseline_sklearn/time_plot.py
 
 
 
+**How To Run Example**
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+./example
+
+## How to run benchmark
+Benchmarks use the `autotune` target (GPU timing on a CSV dataset) and an optional Python driver that sweeps kernel variants and thread-block sizes.
+mkdir build
+cd build
+cmake ..
+cmake --build . --config Release
+benchmark run:
+python3 scripts/benchmark.py with options
+- `--csvpath`  pass dataset file path
+- `--variants` limit the experiment approach such as 'cpu, gpu`
+- `--repeats`  runs per configuration (default `3`)
