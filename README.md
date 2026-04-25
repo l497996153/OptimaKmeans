@@ -31,17 +31,19 @@ python baseline_sklearn/kmeans_base.py 1
 python baseline_sklearn/time_plot.py
 
 
+## CPU Implementation
+
+### This script file will automatically run the code with different size of the 
+### Run the CPU build with a chosen kmeans version (1, 2, or 3; default 3)
+./run_cpu.sh 3
 
 
+## GPU Implementation
 
+### Run the GPU build with a chosen kernel variant (default: warp)
+### Available variants: base | warp | warpmem | warpmemfound | atomicshare | test2 | test3
+./run_gpu.sh warp
 
-
-**How To Run Example**
-mkdir build
-cd build
-cmake ..
-cmake --build . --config Release
-./example
 
 ## How to run benchmark
 Benchmarks use the `autotune` target (GPU timing on a CSV dataset) and an optional Python driver that sweeps kernel variants and thread-block sizes.
