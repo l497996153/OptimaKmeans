@@ -52,24 +52,6 @@ int main(int argc, char* argv[]) {
     //iter_converge = iter_converge + 1;
     printf("Time: %.2f ms, Iterations: %d, Time per Iteration: %.2f ms, Inertia: %.6f\n", time_ms, iter_converge, iter_converge > 0 ? time_ms / iter_converge : 0.0, inertia);
 
-    // Write centroids and cluster assignments to CSV for Python plotting.
-    FILE* fc = fopen("/afs/ece.cmu.edu/usr/zhuoqili/Private/OptimaKmeans/centroids.csv", "w");
-    if (fc) {
-        for (int i = 0; i < k; i++) {
-            for (int j = 0; j < d; j++) {
-                fprintf(fc, "%f%s", centroids[i * d + j], j == d - 1 ? "\n" : ",");
-            }
-        }
-        fclose(fc);
-    }
-    FILE* fa = fopen("/afs/ece.cmu.edu/usr/zhuoqili/Private/OptimaKmeans/clusters.csv", "w");
-    if (fa) {
-        for (int i = 0; i < n; i++) {
-            fprintf(fa, "%d\n", clusters[i]);
-        }
-        fclose(fa);
-    }
-
 
 
 #ifdef DEBUG

@@ -2,12 +2,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Update-step version for kmeans_v1.c (1=thread-local, 2=atomic, 3=reduction).
-# Usage: ./run.sh [version]  (default: 3)
 C_version="${1:-3}"
 
 cd "$SCRIPT_DIR"
-# Clean build dir so the new -DC_version actually takes effect
 rm -rf build
 mkdir -p build
 cd build
